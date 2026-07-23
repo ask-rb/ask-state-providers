@@ -114,6 +114,36 @@ module Ask
 
         def clear
           @client.query("DELETE FROM state_store")
+          @client.query("DELETE FROM locks")
+          @client.query("DELETE FROM queues")
+          @client.query("DELETE FROM lists")
+        end
+
+        def exists?(key)
+          result = @client.prepare(<<~SQL).execute(key, Time.now.utc.strftime("%Y-%m-%d %H:%M:%S.%3N"))
+            SELECT 1 FROM state_store
+            WHERE `key` = ? AND (expires_at IS NULL OR expires_at > ?)
+          SQL
+          result.count > 0
+        end
+
+        def keys(pattern: nil)
+          sql, params = if pattern
+            like = pattern.gsub("*", "%").gsub("?", "_")
+            [<<~SQL, [like]]
+              SELECT `key` FROM state_store
+              WHERE `key` LIKE ? AND (expires_at IS NULL OR expires_at > ?)
+            SQL
+          else
+            [<<~SQL, []]
+              SELECT `key` FROM state_store
+              WHERE (expires_at IS NULL OR expires_at > ?)
+            SQL
+          end
+          now = Time.now.utc.strftime("%Y-%m-%d %H:%M:%S.%3N")
+          stmt = @client.prepare(sql)
+          rows = stmt.execute(*params, now)
+          rows.map { |r| r["key"] }
         end
 
         # -- distributed locking --

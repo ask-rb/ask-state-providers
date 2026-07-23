@@ -116,7 +116,40 @@ module Ask
         end
 
         def clear
-          @pool.with { |conn| conn.exec("DELETE FROM state_store") }
+          @pool.with do |conn|
+            conn.exec("DELETE FROM state_store")
+            conn.exec("DELETE FROM locks")
+            conn.exec("DELETE FROM queues")
+            conn.exec("DELETE FROM lists")
+          end
+        end
+
+        def exists?(key)
+          @pool.with do |conn|
+            result = conn.exec_params(<<~SQL, [key, Time.now.utc])
+              SELECT 1 FROM state_store
+              WHERE key = $1 AND (expires_at IS NULL OR expires_at > $2)
+            SQL
+            result.ntuples > 0
+          end
+        end
+
+        def keys(pattern: nil)
+          @pool.with do |conn|
+            sql, params = if pattern
+              like = pattern.gsub("*", "%").gsub("?", "_")
+              [<<~SQL, [like, Time.now.utc]]
+                SELECT key FROM state_store
+                WHERE key LIKE $1 AND (expires_at IS NULL OR expires_at > $2)
+              SQL
+            else
+              [<<~SQL, [Time.now.utc]]
+                SELECT key FROM state_store
+                WHERE (expires_at IS NULL OR expires_at > $1)
+              SQL
+            end
+            conn.exec_params(sql, params).map { |r| r["key"] }
+          end
         end
 
         # -- distributed locking --

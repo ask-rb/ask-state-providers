@@ -58,6 +58,17 @@ module Ask
           @redis.call("DEL", *keys) if keys.any?
         end
 
+        def exists?(key)
+          @redis.call("EXISTS", prefixed(key)) == 1
+        end
+
+        def keys(pattern: nil)
+          glob = pattern ? "#{NAMESPACE}:#{pattern}" : "#{NAMESPACE}:*"
+          raw = @redis.call("KEYS", glob)
+          prefix_len = NAMESPACE.length + 1
+          raw.map { |k| k[prefix_len..] }
+        end
+
         # -- distributed locking --
 
         def acquire_lock(key, ttl: 10)
@@ -117,7 +128,6 @@ module Ask
           @redis.call("RPUSH", prefixed("list:#{key}"), JSON.generate(value))
           return unless max_length
 
-          # LTRIM keeps only the specified range (negative indices, so -max_length means keep newest max_length)
           @redis.call("LTRIM", prefixed("list:#{key}"), -max_length, -1)
         end
 
