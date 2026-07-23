@@ -178,10 +178,10 @@ require "ask-agent"
 
 store = Ask::State::Providers::SQLite.new
 
-session = Ask::Agent.new(
+session = Ask::Agent::Session.new(
   "triage",
   model: "gpt-4o",
-  persistence: store
+  state: store
 )
 
 session.run("What happened last time we saw this error?")

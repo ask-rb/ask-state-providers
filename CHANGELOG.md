@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] — 2026-07-23
+
+### Changed
+
+- **BREAKING:** Removed `SessionPersistence` wrapper class — no longer needed. Session accepts `State::Adapter` directly via `state:` keyword.
+- **BREAKING:** `Session.load` now calls `adapter.get(id)` instead of `adapter.load(id)`. Any custom adapter must respond to `get`/`set`/`delete`.
+
+### Added
+
+- **Shared contract test suite** — `AdapterContract` module with 26 tests that every backend must pass. Runs against SQLite, Redis (via fakeredis), Postgres (when `DATABASE_URL` is set), and MySQL (when `MYSQL_URL` is set).
+- **Per-turn persistence** — Session now persists after every LLM turn, not just at the end of `run()`. Mid-session crashes no longer lose progress.
+- **`Session.load` restores `@messages`** — Previously `session.messages` returned `nil` after loading. Now it's populated from the restored chat messages.
+
+### Fixed
+
+- **README** — Updated `persistence:` example to `state:`.
+
 ## [0.1.0] — 2026-07-23
 
 ### Added
