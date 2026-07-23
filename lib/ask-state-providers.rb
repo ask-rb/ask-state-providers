@@ -6,10 +6,11 @@ require "ask/state"
 module Ask
   module State
     module Providers
-      autoload :SQLite,   "ask/state/providers/sqlite"
-      autoload :Redis,    "ask/state/providers/redis"
-      autoload :Postgres, "ask/state/providers/postgres"
-      autoload :MySQL,    "ask/state/providers/mysql"
+      autoload :SQLite,              "ask/state/providers/sqlite"
+      autoload :Redis,               "ask/state/providers/redis"
+      autoload :Postgres,            "ask/state/providers/postgres"
+      autoload :MySQL,               "ask/state/providers/mysql"
+      autoload :SessionPersistence,  "ask/state/providers/session_persistence"
     end
   end
 end
