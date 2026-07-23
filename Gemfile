@@ -11,3 +11,7 @@ group :test do
 end
 
 gem "sqlite3", "~> 2.9", group: :test
+
+gem "redis", "~> 5.4", group: :test
+
+gem "fakeredis", "~> 0.1.4", group: :test
