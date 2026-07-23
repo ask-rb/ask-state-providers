@@ -129,7 +129,7 @@ module Ask
 
         def keys(pattern: nil)
           sql, params = if pattern
-            like = pattern.gsub("*", "%").gsub("?", "_")
+            like = self.class.glob_to_like(pattern)
             [<<~SQL, [like]]
               SELECT `key` FROM state_store
               WHERE `key` LIKE ? AND (expires_at IS NULL OR expires_at > ?)

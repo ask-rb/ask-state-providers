@@ -137,7 +137,7 @@ module Ask
         def keys(pattern: nil)
           @pool.with do |conn|
             sql, params = if pattern
-              like = pattern.gsub("*", "%").gsub("?", "_")
+              like = self.class.glob_to_like(pattern)
               [<<~SQL, [like, Time.now.utc]]
                 SELECT key FROM state_store
                 WHERE key LIKE $1 AND (expires_at IS NULL OR expires_at > $2)

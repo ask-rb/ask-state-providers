@@ -115,7 +115,7 @@ module Ask
           @mutex.synchronize do
             now = Time.now.to_f
             sql, params = if pattern
-              like = pattern.gsub("*", "%").gsub("?", "_")
+              like = self.class.glob_to_like(pattern)
               [<<~SQL, [like, now]]
                 SELECT key FROM state_store
                 WHERE key LIKE ? AND (expires_at IS NULL OR expires_at > ?)
