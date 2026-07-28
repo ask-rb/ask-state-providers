@@ -293,6 +293,12 @@ module Ask
 
         # -- lifecycle --
 
+        # Idempotent setup — creates tables if they don't exist.
+        # Called automatically on initialize. Safe to call multiple times.
+        def setup!
+          @pool.with { |conn| conn.exec(MIGRATIONS) }
+        end
+
         def close
           @pool&.shutdown { |c| c.close }
         end

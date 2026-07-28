@@ -143,6 +143,11 @@ module Ask
 
         # -- lifecycle --
 
+        # Idempotent setup. No-op for Redis — no schema to create.
+        def setup!
+          true
+        end
+
         def close
           @redis&.close
         end

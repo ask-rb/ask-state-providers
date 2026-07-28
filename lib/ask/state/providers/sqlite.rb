@@ -272,6 +272,14 @@ module Ask
 
         # -- lifecycle --
 
+        # Idempotent setup — creates tables if they don't exist.
+        # Called automatically on initialize. Safe to call multiple times.
+        def setup!
+          @mutex.synchronize do
+            migrate
+          end
+        end
+
         def close
           @mutex.synchronize do
             @db.close

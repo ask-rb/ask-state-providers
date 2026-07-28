@@ -182,6 +182,11 @@ module Ask
 
       # -- lifecycle --
 
+      # Idempotent setup. No-op for in-memory — data is lost on process exit.
+      def setup!
+        true
+      end
+
       def close
         @mutex.synchronize do
           @data.clear
