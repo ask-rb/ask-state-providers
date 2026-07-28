@@ -3,6 +3,9 @@
 require "ask"
 require "ask/state"
 
+# Load the in-memory state backend (default adapter, previously in ask-core)
+require_relative "ask/state/memory"
+
 module Ask
   module State
     module Providers

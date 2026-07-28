@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] — 2026-07-28
+
+### Added
+
+- **`Ask::State::Memory`** — in-memory state backend, moved from `ask-core`. Same class name, same API. Requires `require "ask-state-providers"` instead of `require "ask"`.
+
+  ```ruby
+  require "ask-state-providers"
+  store = Ask::State::Memory.new
+  ```
+
 ## [0.2.0] — 2026-07-23
 
 ### Changed
