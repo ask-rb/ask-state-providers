@@ -2,6 +2,7 @@
 
 require "json"
 require "securerandom"
+require "time"
 
 module Ask
   module State
