@@ -9,6 +9,13 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      # redis_test.rb requires a real Redis at localhost:6379 (fakeredis
+      # does not intercept the locked redis 5.x client).
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
     strategy:
       matrix:
         ruby: ["3.2", "3.3", "3.4"]

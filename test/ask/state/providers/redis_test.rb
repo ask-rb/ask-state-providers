@@ -2,8 +2,10 @@
 
 require_relative "../../../test_helper"
 
-# fakeredis must be loaded before redis to monkey-patch the connection
-require "fakeredis"
+# These tests require a real Redis server at redis://localhost:6379 (CI
+# provides one via the workflow's Redis service container). fakeredis was
+# previously required here, but it does not intercept the locked redis 5.x
+# client, so it was silently not faking anything.
 require "redis"
 
 module Ask
