@@ -5,7 +5,7 @@ require_relative "../../../support/adapter_contract"
 require "tempfile"
 
 # Runs the shared AdapterContract against every available provider.
-# Providers that require a database server (Postgres, MySQL) are only
+# Providers that require a server (Postgres, MySQL, Redis) are only
 # tested when their connection URL is set.
 
 module Ask
@@ -31,11 +31,13 @@ module Ask
         include AdapterContract
 
         def setup
-          @store = Redis.new(url: "redis://localhost:6379")
+          skip "Set REDIS_URL to test Redis" if ENV["REDIS_URL"].to_s.empty?
+          @store = Redis.new(url: ENV["REDIS_URL"])
           @store.clear
         end
 
         def teardown
+          return unless defined?(@store)
           @store.clear
           @store.close
         end
