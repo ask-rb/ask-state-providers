@@ -68,6 +68,9 @@ module Ask
         def delete(key)
           @mutex.synchronize do
             @db.execute("DELETE FROM state_store WHERE key = ?", [key])
+            # delete removes everything under the key, including ordered
+            # lists (consumers store event feeds as lists).
+            @db.execute("DELETE FROM lists WHERE list_key = ?", [key])
           end
         end
 

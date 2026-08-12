@@ -220,6 +220,21 @@ module AdapterContract
     assert_equal ["from-b"], @store.list_range("b")
   end
 
+  # delete(key) removes everything stored under the key — KV entries and
+  # list entries alike. Consumers (ask-workflow's project store, the
+  # app-server session store) rely on this to drop event feeds.
+  def test_delete_removes_list_entries
+    skip if skip_test?(:test_delete_removes_list_entries)
+    @store.set("k", "value")
+    @store.list_append("k", "a")
+    @store.list_append("k", "b")
+
+    @store.delete("k")
+
+    assert_nil @store.get("k")
+    assert_equal [], @store.list_range("k")
+  end
+
   # -- conformance --
 
   def test_responds_to_all_primitives

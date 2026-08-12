@@ -41,7 +41,13 @@ module Ask
       end
 
       def delete(key)
-        @mutex.synchronize { @data.delete(key) }
+        @mutex.synchronize do
+          @data.delete(key)
+          # delete removes everything under the key, including ordered
+          # lists (consumers store event feeds and queues as lists).
+          @lists.delete(key)
+          @queues.delete(key)
+        end
       end
 
       def set_if_not_exists(key, value, ttl: nil)

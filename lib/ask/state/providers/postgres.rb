@@ -94,6 +94,9 @@ module Ask
         def delete(key)
           @pool.with do |conn|
             conn.exec_params("DELETE FROM state_store WHERE key = $1", [key])
+            # delete removes everything under the key, including ordered
+            # lists (consumers store event feeds as lists).
+            conn.exec_params("DELETE FROM lists WHERE list_key = $1", [key])
           end
         end
 

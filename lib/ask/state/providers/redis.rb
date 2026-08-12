@@ -45,7 +45,9 @@ module Ask
         end
 
         def delete(key)
-          @redis.call("DEL", prefixed(key))
+          # delete removes everything under the key, including ordered
+          # lists (consumers store event feeds as lists).
+          @redis.call("DEL", prefixed(key), prefixed("list:#{key}"))
         end
 
         def set_if_not_exists(key, value, ttl: nil)

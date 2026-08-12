@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.4.1] — 2026-08-12
+
+### Fixed
+
+- **`delete(key)` now removes everything under the key** — including
+  ordered lists (and queues in the Memory backend). Consumers store event
+  feeds as lists (ask-workflow's project store, the app-server session
+  store); previously the feed survived deletion. New shared contract test
+  `test_delete_removes_list_entries` runs against every provider.
+
 ## [0.3.0] — 2026-07-28
 
 ### Added

@@ -92,6 +92,9 @@ module Ask
 
         def delete(key)
           @client.prepare("DELETE FROM state_store WHERE `key` = ?").execute(key)
+          # delete removes everything under the key, including ordered
+          # lists (consumers store event feeds as lists).
+          @client.prepare("DELETE FROM lists WHERE list_key = ?").execute(key)
         end
 
         def set_if_not_exists(key, value, ttl: nil)
