@@ -3,6 +3,8 @@
 require "json"
 require "time"
 require "securerandom"
+require "connection_pool"
+require "pg"
 
 module Ask
   module State
@@ -58,8 +60,6 @@ module Ask
         # @param pool_size [Integer] connection pool size (default 5)
         def initialize(url: ENV.fetch("DATABASE_URL", "postgres://localhost:5432/ask_state"),
                        pool_size: 5)
-          require "pg"
-
           @pool = ConnectionPool.new(size: pool_size) do
             ::PG.connect(url)
           end
@@ -81,9 +81,11 @@ module Ask
 
         def set(key, value, ttl: nil)
           @pool.with do |conn|
+            # Explicit casts: $3 is nil when no ttl, and PostgreSQL can't
+            # infer a type for a bare NULL parameter.
             conn.exec_params(<<~SQL, [key, JSON.generate(value), ttl ? Time.now.utc + ttl : nil])
               INSERT INTO state_store (key, value, expires_at)
-              VALUES ($1, $2, $3)
+              VALUES ($1::text, $2::text, $3::timestamptz)
               ON CONFLICT (key) DO UPDATE SET
                 value = EXCLUDED.value,
                 expires_at = EXCLUDED.expires_at
@@ -105,14 +107,21 @@ module Ask
             now = Time.now.utc
             expires = ttl ? now + ttl : nil
 
+            # Insert when the key is missing or its row is expired. An
+            # expired row still conflicts on the primary key, so the
+            # ON CONFLICT branch overwrites it — but only when it is
+            # actually expired, never a live value.
             result = conn.exec_params(<<~SQL, [key, JSON.generate(value), expires, now])
               INSERT INTO state_store (key, value, expires_at)
-              SELECT $1, $2, $3
+              SELECT $1::text, $2::text, $3::timestamptz
               WHERE NOT EXISTS (
                 SELECT 1 FROM state_store
                 WHERE key = $1 AND (expires_at IS NULL OR expires_at > $4)
               )
-              ON CONFLICT (key) DO NOTHING
+              ON CONFLICT (key) DO UPDATE SET
+                value = EXCLUDED.value,
+                expires_at = EXCLUDED.expires_at
+              WHERE state_store.expires_at IS NOT NULL AND state_store.expires_at <= $4
             SQL
             result.cmd_tuples > 0
           end
@@ -167,9 +176,9 @@ module Ask
             conn.exec_params("DELETE FROM locks WHERE key = $1 AND expires_at <= $2",
                            [key, now])
 
-            result = conn.exec_params(<<~SQL, [key, expires_at_time, token, now])
+            result = conn.exec_params(<<~SQL, [key, expires_at_time, token])
               INSERT INTO locks (key, expires_at, token)
-              SELECT $1, $2, $3
+              SELECT $1::text, $2::timestamptz, $3::text
               WHERE NOT EXISTS (
                 SELECT 1 FROM locks
                 WHERE key = $1
@@ -248,13 +257,16 @@ module Ask
 
             return unless max_length
 
-            conn.exec_params(<<~SQL, [key, key, max_length])
-              DELETE FROM lists WHERE id <= (
+            # Keep the newest max_length entries: the cutoff is the
+            # oldest id inside the newest max_length — delete strictly
+            # older rows (and only this list's).
+            conn.exec_params(<<~SQL, [key, max_length, key])
+              DELETE FROM lists WHERE list_key = $3 AND id < (
                 SELECT COALESCE(MIN(id), 0) FROM (
                   SELECT id FROM lists
                   WHERE list_key = $1
                   ORDER BY id DESC
-                  LIMIT $3
+                  LIMIT $2::bigint
                 ) sub
               )
             SQL
