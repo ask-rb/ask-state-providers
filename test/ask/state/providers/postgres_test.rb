@@ -38,6 +38,25 @@ module Ask
           @store.close
         end
 
+        # A dead pooled connection (the server closed it — a fork
+        # inherited it, an idle timeout) must not surface: the provider
+        # reloads the pool and retries. Simulated for real: terminate
+        # the pooled connection from the server side.
+        def test_reloads_the_pool_after_a_connection_dies
+          @store.set("survivor", "still here")
+
+          conn = @store.instance_variable_get(:@pool).checkout
+          backend_pid = conn.backend_pid
+          @store.instance_variable_get(:@pool).checkin
+
+          killer = PG.connect(ENV["DATABASE_URL"])
+          killer.exec("SELECT pg_terminate_backend(#{backend_pid})")
+          killer.close
+
+          assert_equal "still here", @store.get("survivor"),
+            "a connection the server closed is reloaded and the call retried"
+        end
+
         # -- key-value --
 
         class KVTest < PostgresTest

@@ -85,7 +85,7 @@ module Ask
         # -- key-value --
 
         def get(key)
-          @pool.with do |conn|
+          with_connection do |conn|
             row = conn.exec_params(<<~SQL, [key, Time.now.utc])
               SELECT value FROM state_store
               WHERE key = $1 AND (expires_at IS NULL OR expires_at > $2)
@@ -95,7 +95,7 @@ module Ask
         end
 
         def set(key, value, ttl: nil)
-          @pool.with do |conn|
+          with_connection do |conn|
             # Explicit casts: $3 is nil when no ttl, and PostgreSQL can't
             # infer a type for a bare NULL parameter.
             conn.exec_params(<<~SQL, [key, JSON.generate(value), ttl ? Time.now.utc + ttl : nil])
@@ -109,7 +109,7 @@ module Ask
         end
 
         def delete(key)
-          @pool.with do |conn|
+          with_connection do |conn|
             conn.exec_params("DELETE FROM state_store WHERE key = $1", [key])
             # delete removes everything under the key, including ordered
             # lists (consumers store event feeds as lists).
@@ -118,7 +118,7 @@ module Ask
         end
 
         def set_if_not_exists(key, value, ttl: nil)
-          @pool.with do |conn|
+          with_connection do |conn|
             now = Time.now.utc
             expires = ttl ? now + ttl : nil
 
@@ -143,7 +143,7 @@ module Ask
         end
 
         def clear
-          @pool.with do |conn|
+          with_connection do |conn|
             conn.exec("DELETE FROM state_store")
             conn.exec("DELETE FROM locks")
             conn.exec("DELETE FROM queues")
@@ -152,7 +152,7 @@ module Ask
         end
 
         def exists?(key)
-          @pool.with do |conn|
+          with_connection do |conn|
             result = conn.exec_params(<<~SQL, [key, Time.now.utc])
               SELECT 1 FROM state_store
               WHERE key = $1 AND (expires_at IS NULL OR expires_at > $2)
@@ -162,7 +162,7 @@ module Ask
         end
 
         def keys(pattern: nil)
-          @pool.with do |conn|
+          with_connection do |conn|
             sql, params = if pattern
               like = self.class.glob_to_like(pattern)
               [<<~SQL, [like, Time.now.utc]]
@@ -186,7 +186,7 @@ module Ask
           expires_at_time = now + ttl
           token = SecureRandom.hex(16)
 
-          acquired = @pool.with do |conn|
+          acquired = with_connection do |conn|
             # First clean up expired locks
             conn.exec_params("DELETE FROM locks WHERE key = $1 AND expires_at <= $2",
                            [key, now])
@@ -206,7 +206,7 @@ module Ask
         end
 
         def release_lock(key, lock)
-          @pool.with do |conn|
+          with_connection do |conn|
             result = conn.exec_params(
               "DELETE FROM locks WHERE key = $1 AND token = $2",
               [key, lock.token]
@@ -220,7 +220,7 @@ module Ask
         def enqueue(queue, value)
           id = SecureRandom.uuid
 
-          @pool.with do |conn|
+          with_connection do |conn|
             conn.exec_params(<<~SQL, [queue, JSON.generate(value), Time.now.utc])
               INSERT INTO queues (queue_name, value, enqueued_at)
               VALUES ($1, $2, $3)
@@ -231,7 +231,7 @@ module Ask
         end
 
         def dequeue(queue)
-          @pool.with do |conn|
+          with_connection do |conn|
             result = conn.exec_params(<<~SQL, [queue])
               DELETE FROM queues
               WHERE id = (
@@ -253,7 +253,7 @@ module Ask
         end
 
         def queue_depth(queue)
-          @pool.with do |conn|
+          with_connection do |conn|
             result = conn.exec_params(
               "SELECT COUNT(*) AS cnt FROM queues WHERE queue_name = $1", [queue]
             )
@@ -264,7 +264,7 @@ module Ask
         # -- ordered lists --
 
         def list_append(key, value, max_length: nil)
-          @pool.with do |conn|
+          with_connection do |conn|
             conn.exec_params(<<~SQL, [key, JSON.generate(value)])
               INSERT INTO lists (list_key, value)
               VALUES ($1, $2)
@@ -289,7 +289,7 @@ module Ask
         end
 
         def list_range(key, start = 0, stop = -1)
-          @pool.with do |conn|
+          with_connection do |conn|
             rows = if stop == -1
               conn.exec_params(<<~SQL, [key, start])
                 SELECT value FROM lists
@@ -312,7 +312,7 @@ module Ask
 
         def list_remove(key, value)
           serialized = JSON.generate(value)
-          @pool.with do |conn|
+          with_connection do |conn|
             result = conn.exec_params(
               "DELETE FROM lists WHERE list_key = $1 AND value = $2",
               [key, serialized]
@@ -326,17 +326,29 @@ module Ask
         # Idempotent setup — creates tables if they don't exist.
         # Called automatically on initialize. Safe to call multiple times.
         def setup!
-          @pool.with { |conn| conn.exec(MIGRATIONS) }
+          with_connection { |conn| conn.exec(MIGRATIONS) }
         end
 
         def close
-          @pool&.shutdown { |c| c.close }
+          @pool&.shutdown { |c| c.close unless c.finished? }
         end
 
         private
 
+        # Check out a connection, running the block with it. A dead
+        # pooled connection (the server closed it — a fork inherited it,
+        # an idle timeout, a server restart) raises PG::ConnectionBad;
+        # reload the pool and retry once so a stale checkout never
+        # surfaces to callers.
+        def with_connection(&block)
+          @pool.with(&block)
+        rescue PG::ConnectionBad
+          @pool.reload { |conn| conn.close unless conn.finished? }
+          @pool.with(&block)
+        end
+
         def migrate
-          @pool.with { |conn| conn.exec(MIGRATIONS) }
+          with_connection { |conn| conn.exec(MIGRATIONS) }
         end
       end
     end
