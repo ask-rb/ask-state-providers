@@ -5,6 +5,24 @@ require_relative "../../../test_helper"
 module Ask
   module State
     module Providers
+      # URL guards don't need a live database — always run.
+      class PostgresUrlTest < Minitest::Test
+        def test_darwin_safe_url_appends_gssencmode
+          url = Postgres.darwin_safe_url("postgres://localhost:5432/ask_state")
+          assert_equal "postgres://localhost:5432/ask_state?gssencmode=disable", url
+        end
+
+        def test_darwin_safe_url_preserves_existing_query_string
+          url = Postgres.darwin_safe_url("postgres://localhost:5432/ask_state?sslmode=require")
+          assert_equal "postgres://localhost:5432/ask_state?sslmode=require&gssencmode=disable", url
+        end
+
+        def test_darwin_safe_url_is_idempotent
+          url = Postgres.darwin_safe_url("postgres://localhost:5432/ask_state?gssencmode=disable")
+          assert_equal "postgres://localhost:5432/ask_state?gssencmode=disable", url
+        end
+      end
+
       class PostgresTest < Minitest::Test
         SKIP = ENV.fetch("DATABASE_URL", "").empty?
 

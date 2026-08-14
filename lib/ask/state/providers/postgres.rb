@@ -60,11 +60,26 @@ module Ask
         # @param pool_size [Integer] connection pool size (default 5)
         def initialize(url: ENV.fetch("DATABASE_URL", "postgres://localhost:5432/ask_state"),
                        pool_size: 5)
+          # On macOS, libpq's default GSSAPI negotiation can segfault
+          # when a forked process (SolidQueue worker) opens a fresh
+          # connection — the same crash the sibling apps guard with
+          # `gssencmode: disable` in database.yml. The store connects
+          # directly (not through ActiveRecord), so the guard lives here.
+          url = self.class.darwin_safe_url(url) if RUBY_PLATFORM =~ /darwin/
+
           @pool = ConnectionPool.new(size: pool_size) do
             ::PG.connect(url)
           end
 
           migrate
+        end
+
+        # Append gssencmode=disable to a URL on macOS (idempotent).
+        def self.darwin_safe_url(url)
+          return url if url.include?("gssencmode")
+
+          separator = url.include?("?") ? "&" : "?"
+          "#{url}#{separator}gssencmode=disable"
         end
 
         # -- key-value --
