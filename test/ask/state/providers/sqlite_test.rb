@@ -19,6 +19,44 @@ module Ask
           File.unlink(@path) if File.exist?(@path)
         end
 
+        # -- fork safety --
+
+        # SolidQueue forks workers from a supervisor that booted the
+        # app — the child inherits the parent's open SQLite connection,
+        # which sqlite3's fork safety closes. The provider must reopen
+        # the connection (and swap the mutex) in the child, so a forked
+        # process can keep reading and writing.
+        def test_reconnects_after_fork
+          @store.set("parent", "written before fork")
+
+          reader, writer = IO.pipe
+          pid = Process.fork do
+            reader.close
+            begin
+              # The inherited connection is closed by fork safety; a
+              # fresh mutex is needed too (the parent's may be locked).
+              @store.set("child", "written after fork")
+              child = @store.get("child")
+              parent = @store.get("parent")
+              writer.write(Marshal.dump([parent, child]))
+            rescue => e
+              writer.write(Marshal.dump([e.class.name, e.message]))
+            ensure
+              writer.close
+            end
+            exit! 0
+          end
+          writer.close
+          result = Marshal.load(reader.read)
+          reader.close
+          Process.wait(pid)
+
+          assert_equal ["written before fork", "written after fork"], result,
+            "the child reconnects and sees both its own writes and the parent's"
+        ensure
+          Process.wait(pid) if pid && !Process.waitpid2(pid, Process::WNOHANG).nil? rescue nil
+        end
+
         # -- key-value --
 
         class KVTest < SQLiteTest

@@ -25,22 +25,17 @@ module Ask
         def initialize(path: "sessions.db", **pragmas)
           require "sqlite3"
 
+          @path = path
+          @pid = Process.pid
           @mutex = Mutex.new
-          @db = SQLite3::Database.new(path)
-          @db.results_as_hash = true
-          @db.busy_timeout = 5000
-
-          defaults = {
+          @pragmas = {
             journal_mode: "WAL",
             synchronous: "NORMAL",
             foreign_keys: "ON",
             cache_size: -64_000
-          }
+          }.merge(pragmas)
 
-          defaults.merge(pragmas).each do |key, value|
-            @db.execute("PRAGMA #{key} = #{value}")
-          end
-
+          connect
           migrate
         end
 
@@ -48,7 +43,7 @@ module Ask
 
         def get(key)
           @mutex.synchronize do
-            row = @db.get_first_row(<<~SQL, [key, Time.now.to_f])
+            row = db.get_first_row(<<~SQL, [key, Time.now.to_f])
               SELECT value FROM state_store
               WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)
             SQL
@@ -58,7 +53,7 @@ module Ask
 
         def set(key, value, ttl: nil)
           @mutex.synchronize do
-            @db.execute(<<~SQL, [key, JSON.generate(value), ttl ? Time.now.to_f + ttl : nil])
+            db.execute(<<~SQL, [key, JSON.generate(value), ttl ? Time.now.to_f + ttl : nil])
               INSERT OR REPLACE INTO state_store (key, value, expires_at)
               VALUES (?, ?, ?)
             SQL
@@ -67,10 +62,10 @@ module Ask
 
         def delete(key)
           @mutex.synchronize do
-            @db.execute("DELETE FROM state_store WHERE key = ?", [key])
+            db.execute("DELETE FROM state_store WHERE key = ?", [key])
             # delete removes everything under the key, including ordered
             # lists (consumers store event feeds as lists).
-            @db.execute("DELETE FROM lists WHERE list_key = ?", [key])
+            db.execute("DELETE FROM lists WHERE list_key = ?", [key])
           end
         end
 
@@ -79,15 +74,15 @@ module Ask
             now = Time.now.to_f
             expires = ttl ? now + ttl : nil
 
-            row = @db.get_first_row(
+            row = db.get_first_row(
               "SELECT 1 FROM state_store WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)",
               [key, now]
             )
             return false if row
 
             # Key doesn't exist or is expired — delete any leftovers, then insert
-            @db.execute("DELETE FROM state_store WHERE key = ?", [key])
-            @db.execute(<<~SQL, [key, JSON.generate(value), expires])
+            db.execute("DELETE FROM state_store WHERE key = ?", [key])
+            db.execute(<<~SQL, [key, JSON.generate(value), expires])
               INSERT INTO state_store (key, value, expires_at)
               VALUES (?, ?, ?)
             SQL
@@ -97,16 +92,16 @@ module Ask
 
         def clear
           @mutex.synchronize do
-            @db.execute("DELETE FROM state_store")
-            @db.execute("DELETE FROM locks")
-            @db.execute("DELETE FROM queues")
-            @db.execute("DELETE FROM lists")
+            db.execute("DELETE FROM state_store")
+            db.execute("DELETE FROM locks")
+            db.execute("DELETE FROM queues")
+            db.execute("DELETE FROM lists")
           end
         end
 
         def exists?(key)
           @mutex.synchronize do
-            row = @db.get_first_row(<<~SQL, [key, Time.now.to_f])
+            row = db.get_first_row(<<~SQL, [key, Time.now.to_f])
               SELECT 1 FROM state_store
               WHERE key = ? AND (expires_at IS NULL OR expires_at > ?)
             SQL
@@ -129,7 +124,7 @@ module Ask
                 WHERE (expires_at IS NULL OR expires_at > ?)
               SQL
             end
-            @db.execute(sql, params).map { |r| r["key"] }
+            db.execute(sql, params).map { |r| r["key"] }
           end
         end
 
@@ -141,14 +136,14 @@ module Ask
             expires_at_time = Time.now + ttl
             token = SecureRandom.hex(16)
 
-            row = @db.get_first_row(
+            row = db.get_first_row(
               "SELECT 1 FROM locks WHERE key = ? AND expires_at > ?",
               [key, now]
             )
             return nil if row
 
-            @db.execute("DELETE FROM locks WHERE key = ?", [key])
-            @db.execute(<<~SQL, [key, expires_at_time.to_f, token])
+            db.execute("DELETE FROM locks WHERE key = ?", [key])
+            db.execute(<<~SQL, [key, expires_at_time.to_f, token])
               INSERT INTO locks (key, expires_at, token)
               VALUES (?, ?, ?)
             SQL
@@ -159,11 +154,11 @@ module Ask
 
         def release_lock(key, lock)
           @mutex.synchronize do
-            @db.execute(
+            db.execute(
               "DELETE FROM locks WHERE key = ? AND token = ?",
               [key, lock.token]
             )
-            @db.changes > 0
+            db.changes > 0
           end
         end
 
@@ -171,18 +166,18 @@ module Ask
 
         def enqueue(queue, value)
           @mutex.synchronize do
-            @db.execute(<<~SQL, [queue, JSON.generate(value), Time.now.iso8601])
+            db.execute(<<~SQL, [queue, JSON.generate(value), Time.now.iso8601])
               INSERT INTO queues (queue_name, value, enqueued_at)
               VALUES (?, ?, ?)
             SQL
-            id = @db.last_insert_row_id
+            id = db.last_insert_row_id
             QueueEntry.new(id: id.to_s, value: value, enqueued_at: Time.now)
           end
         end
 
         def dequeue(queue)
           @mutex.synchronize do
-            row = @db.get_first_row(<<~SQL, [queue])
+            row = db.get_first_row(<<~SQL, [queue])
               DELETE FROM queues
               WHERE id = (
                 SELECT id FROM queues
@@ -204,7 +199,7 @@ module Ask
 
         def queue_depth(queue)
           @mutex.synchronize do
-            row = @db.get_first_row(
+            row = db.get_first_row(
               "SELECT COUNT(*) AS cnt FROM queues WHERE queue_name = ?", [queue]
             )
             row["cnt"]
@@ -217,14 +212,14 @@ module Ask
           @mutex.synchronize do
             serialized = JSON.generate(value)
 
-            @db.execute(<<~SQL, [key, serialized])
+            db.execute(<<~SQL, [key, serialized])
               INSERT INTO lists (list_key, value)
               VALUES (?, ?)
             SQL
 
             return unless max_length
 
-            row = @db.get_first_row(<<~SQL, [key, max_length])
+            row = db.get_first_row(<<~SQL, [key, max_length])
               SELECT MIN(id) AS cutoff FROM (
                 SELECT id FROM lists
                 WHERE list_key = ?
@@ -234,7 +229,7 @@ module Ask
             SQL
             return unless row && row["cutoff"]
 
-            @db.execute(<<~SQL, [key, row["cutoff"]])
+            db.execute(<<~SQL, [key, row["cutoff"]])
               DELETE FROM lists WHERE list_key = ? AND id < ?
             SQL
           end
@@ -243,7 +238,7 @@ module Ask
         def list_range(key, start = 0, stop = -1)
           @mutex.synchronize do
             rows = if stop == -1
-              @db.execute(<<~SQL, [key, start])
+              db.execute(<<~SQL, [key, start])
                 SELECT value FROM lists
                 WHERE list_key = ?
                 ORDER BY id ASC
@@ -251,7 +246,7 @@ module Ask
               SQL
             else
               limit = stop - start + 1
-              @db.execute(<<~SQL, [key, limit, start])
+              db.execute(<<~SQL, [key, limit, start])
                 SELECT value FROM lists
                 WHERE list_key = ?
                 ORDER BY id ASC
@@ -265,11 +260,11 @@ module Ask
         def list_remove(key, value)
           @mutex.synchronize do
             serialized = JSON.generate(value)
-            @db.execute(
+            db.execute(
               "DELETE FROM lists WHERE list_key = ? AND value = ?",
               [key, serialized]
             )
-            @db.changes
+            db.changes
           end
         end
 
@@ -285,14 +280,41 @@ module Ask
 
         def close
           @mutex.synchronize do
-            @db.close
+            @db&.close unless @db&.closed?
           end
         end
 
         private
 
+        # Open (or reopen) the database connection. Reconnect is the
+        # fork story: when a process forks (SolidQueue workers, Puma
+        # cluster), the child inherits the parent's connection, which
+        # sqlite3's fork safety closes — so every operation goes through
+        # #db, which reopens the connection and gives the child a fresh
+        # mutex when the process id changed.
+        def connect
+          @db = SQLite3::Database.new(@path)
+          @db.results_as_hash = true
+          @db.busy_timeout = 5000
+          @pragmas.each do |key, value|
+            @db.execute("PRAGMA #{key} = #{value}")
+          end
+        end
+
+        # The live connection, reopened if a fork closed it. Call this
+        # inside the mutex synchronize (connect swaps the mutex when the
+        # process changed, so the old mutex is the one we're holding).
+        def db
+          if @pid != Process.pid || @db.nil? || @db.closed?
+            @pid = Process.pid
+            @mutex = Mutex.new
+            connect
+          end
+          @db
+        end
+
         def migrate
-          @db.execute_batch(<<~SQL)
+          db.execute_batch(<<~SQL)
             CREATE TABLE IF NOT EXISTS state_store (
               key         TEXT PRIMARY KEY NOT NULL,
               value       TEXT NOT NULL,
