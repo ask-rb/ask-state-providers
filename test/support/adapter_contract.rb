@@ -131,6 +131,64 @@ module AdapterContract
     refute_nil @store.acquire_lock("b", ttl: 10)
   end
 
+  # The Adapter contract: release_lock returns "true if released, false
+  # if lock was already expired or not held" — so an owner whose lock
+  # has timed out (even if the backend has not reaped the row yet)
+  # must get false, matching Memory (checks expired?) and Redis
+  # (key auto-expires).
+  def test_lock_release_returns_false_for_expired_lock
+    skip if skip_test?(:test_lock_release_returns_false_for_expired_lock)
+    lock = @store.acquire_lock("k", ttl: -1)
+    refute_nil lock
+    refute @store.release_lock("k", lock),
+      "an already-expired lock is not released by its former owner"
+  end
+
+  def test_lock_double_release_fails
+    skip if skip_test?(:test_lock_double_release_fails)
+    lock = @store.acquire_lock("k", ttl: 10)
+    assert @store.release_lock("k", lock)
+    refute @store.release_lock("k", lock)
+  end
+
+  # Token safety end to end: once an expired lock has been taken over,
+  # the stale owner cannot release — or observe as free — the lock the
+  # new owner holds.
+  def test_lock_stale_owner_cannot_release_replacement
+    skip if skip_test?(:test_lock_stale_owner_cannot_release_replacement)
+    stale = @store.acquire_lock("k", ttl: -1)
+    refute_nil stale
+
+    current = @store.acquire_lock("k", ttl: 10)
+    refute_nil current, "an expired lock never blocks the next acquirer"
+
+    refute @store.release_lock("k", stale),
+      "the expired owner cannot release a lock it no longer holds"
+    assert_nil @store.acquire_lock("k", ttl: 10),
+      "the current owner still holds the lock"
+    assert @store.release_lock("k", current)
+  end
+
+  def test_lock_zero_ttl_is_instantly_expired
+    skip if skip_test?(:test_lock_zero_ttl_is_instantly_expired)
+    first = @store.acquire_lock("k", ttl: 0)
+    refute_nil first
+    second = @store.acquire_lock("k", ttl: 10)
+    refute_nil second, "a ttl of 0 grants no exclusion — expired on arrival"
+    refute @store.release_lock("k", first)
+    assert @store.release_lock("k", second)
+  end
+
+  def test_lock_ttl_sets_expiry_in_the_future
+    skip if skip_test?(:test_lock_ttl_sets_expiry_in_the_future)
+    before = Time.now
+    lock = @store.acquire_lock("k", ttl: 60)
+    refute_nil lock
+    assert_kind_of Time, lock.expires_at
+    assert lock.expires_at >= before + 59
+    assert lock.expires_at <= Time.now + 61
+  end
+
   # -- message queues --
 
   def test_queue_enqueue_dequeue

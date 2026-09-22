@@ -183,33 +183,40 @@ module Ask
 
         def acquire_lock(key, ttl: 10)
           now = Time.now.utc
-          expires_at_time = now + ttl
+          expires_at = now + ttl
           token = SecureRandom.hex(16)
 
-          acquired = with_connection do |conn|
-            # First clean up expired locks
-            conn.exec_params("DELETE FROM locks WHERE key = $1 AND expires_at <= $2",
-                           [key, now])
-
-            result = conn.exec_params(<<~SQL, [key, expires_at_time, token])
-              INSERT INTO locks (key, expires_at, token)
-              SELECT $1::text, $2::timestamptz, $3::text
-              WHERE NOT EXISTS (
-                SELECT 1 FROM locks
-                WHERE key = $1
-              )
+          row = with_connection do |conn|
+            # One atomic upsert: insert when free, take over only an
+            # expired row, leave a live lock's token untouched. This
+            # replaces DELETE-then-INSERT...WHERE NOT EXISTS, which let
+            # concurrent racers collide on the primary key and raise
+            # UniqueViolation instead of returning nil. A row comes back
+            # only when we won.
+            conn.exec_params(<<~SQL, [key, token, expires_at, now])
+              INSERT INTO locks (key, token, expires_at)
+              VALUES ($1::text, $2::text, $3::timestamptz)
+              ON CONFLICT (key) DO UPDATE SET
+                token = EXCLUDED.token,
+                expires_at = EXCLUDED.expires_at
+              WHERE locks.expires_at <= $4::timestamptz
+              RETURNING token
             SQL
-            result.cmd_tuples > 0
           end
 
-          acquired ? Lock.new(id: key, token: token, expires_at: expires_at_time) : nil
+          return nil unless row.ntuples > 0 && row[0]["token"] == token
+
+          Lock.new(id: key, token: token, expires_at: expires_at)
         end
 
         def release_lock(key, lock)
           with_connection do |conn|
+            # Token match plus unexpired: an owner whose lock has already
+            # timed out must not "release" a row nobody considers held
+            # (the Adapter contract returns false once expired).
             result = conn.exec_params(
-              "DELETE FROM locks WHERE key = $1 AND token = $2",
-              [key, lock.token]
+              "DELETE FROM locks WHERE key = $1 AND token = $2 AND expires_at > $3",
+              [key, lock.token, Time.now.utc]
             )
             result.cmd_tuples > 0
           end

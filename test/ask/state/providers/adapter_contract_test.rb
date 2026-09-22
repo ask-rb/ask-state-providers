@@ -42,12 +42,13 @@ module Ask
           @store.close
         end
 
-        # Redis rejects negative/zero TTL values, so tests that rely on
-        # immediate expiry must be skipped for this backend.
+        # Redis still rejects negative/zero TTL values on key-value SET
+        # (KV expiry hardening is outside the lock contract), so those
+        # two KV tests stay skipped. Lock TTLs — including ttl <= 0 —
+        # are handled in the provider and run everywhere.
         def skip_test?(name)
           %i[test_kv_ttl_expires
-             test_kv_set_if_not_exists_allows_after_expiry
-             test_lock_expired_can_be_acquired].include?(name)
+             test_kv_set_if_not_exists_allows_after_expiry].include?(name)
         end
       end
 

@@ -153,33 +153,39 @@ module Ask
 
         def acquire_lock(key, ttl: 10)
           now = Time.now.utc
-          expires_at_time = now + ttl
+          expires_at = now + ttl
           token = SecureRandom.hex(16)
-          now_f = now.strftime("%Y-%m-%d %H:%M:%S.%3N")
+          now_s = now.strftime("%Y-%m-%d %H:%M:%S.%3N")
+          expires_s = expires_at.strftime("%Y-%m-%d %H:%M:%S.%3N")
 
-          # Clean up expired lock
-          @client.prepare("DELETE FROM locks WHERE `key` = ? AND expires_at <= ?").execute(key, now_f)
-
-          result = @client.prepare(<<~SQL).execute(key, expires_at_time.strftime("%Y-%m-%d %H:%M:%S.%3N"), token)
-            INSERT INTO locks (`key`, expires_at, token)
-            SELECT ?, ?, ?
-            WHERE NOT EXISTS (
-              SELECT 1 FROM locks WHERE `key` = ?
-            )
+          # One atomic upsert: insert when free; overwrite the row only
+          # when it has expired (IF keeps a live lock's token), so a
+          # contender can never displace an active owner. affected_rows
+          # is 1 for insert, 2 for takeover, 0 when a live lock won —
+          # the old COUNT(*) check could not tell "held by someone"
+          # from "held by me" and handed a second Lock to a contender.
+          stmt = @client.prepare(<<~SQL)
+            INSERT INTO locks (`key`, token, expires_at)
+            VALUES (?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+              token = IF(expires_at <= ?, VALUES(token), token),
+              expires_at = IF(expires_at <= ?, VALUES(expires_at), expires_at)
           SQL
-          result = @client.prepare(<<~SQL).execute(key)
-            SELECT COUNT(*) AS cnt FROM locks WHERE `key` = ?
-          SQL
+          stmt.execute(key, token, expires_s, now_s, now_s)
 
-          # Check if we got the lock
-          row = result.first
-          return nil unless row && row["cnt"].to_i > 0
+          return nil unless @client.affected_rows > 0
 
-          Lock.new(id: key, token: token, expires_at: expires_at_time)
+          Lock.new(id: key, token: token, expires_at: expires_at)
         end
 
         def release_lock(key, lock)
-          @client.prepare("DELETE FROM locks WHERE `key` = ? AND token = ?").execute(key, lock.token)
+          # Token match plus unexpired: an owner whose lock has already
+          # timed out must not "release" a row nobody considers held
+          # (the Adapter contract returns false once expired).
+          stmt = @client.prepare(
+            "DELETE FROM locks WHERE `key` = ? AND token = ? AND expires_at > ?"
+          )
+          stmt.execute(key, lock.token, Time.now.utc.strftime("%Y-%m-%d %H:%M:%S.%3N"))
           @client.affected_rows > 0
         end
 

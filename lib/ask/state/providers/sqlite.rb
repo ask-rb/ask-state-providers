@@ -132,31 +132,39 @@ module Ask
 
         def acquire_lock(key, ttl: 10)
           @mutex.synchronize do
-            now = Time.now.to_f
-            expires_at_time = Time.now + ttl
+            now = Time.now
+            expires_at = now + ttl
             token = SecureRandom.hex(16)
 
-            row = db.get_first_row(
-              "SELECT 1 FROM locks WHERE key = ? AND expires_at > ?",
-              [key, now]
-            )
-            return nil if row
-
-            db.execute("DELETE FROM locks WHERE key = ?", [key])
-            db.execute(<<~SQL, [key, expires_at_time.to_f, token])
-              INSERT INTO locks (key, expires_at, token)
+            # One atomic upsert: insert when the key is free, overwrite
+            # only when the held lock is expired, never touch a live one.
+            # The old SELECT-then-DELETE-then-INSERT let a second process
+            # delete a lock that had just been granted to someone else.
+            # A row comes back only when we won.
+            row = db.get_first_row(<<~SQL, [key, token, expires_at.to_f, now.to_f])
+              INSERT INTO locks (key, token, expires_at)
               VALUES (?, ?, ?)
+              ON CONFLICT(key) DO UPDATE SET
+                token = excluded.token,
+                expires_at = excluded.expires_at
+              WHERE locks.expires_at <= ?
+              RETURNING token
             SQL
 
-            Lock.new(id: key, token: token, expires_at: expires_at_time)
+            return nil unless row && row["token"] == token
+
+            Lock.new(id: key, token: token, expires_at: expires_at)
           end
         end
 
         def release_lock(key, lock)
           @mutex.synchronize do
+            # Token match plus unexpired: an owner whose lock has already
+            # timed out must not "release" a row nobody considers held
+            # (the Adapter contract returns false once expired).
             db.execute(
-              "DELETE FROM locks WHERE key = ? AND token = ?",
-              [key, lock.token]
+              "DELETE FROM locks WHERE key = ? AND token = ? AND expires_at > ?",
+              [key, lock.token, Time.now.to_f]
             )
             db.changes > 0
           end
