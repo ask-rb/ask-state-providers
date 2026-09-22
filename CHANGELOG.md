@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.4.8] — 2026-09-22
+
+### Changed
+
+- **Minimum `ask-core` raised to `>= 0.12.0`** (was `>= 0.11.4`) — aligns
+  the provider stack with the decision-vocabulary release of `ask-core`.
+
 ### Fixed
 
 - **Provider lock contract hardened (token-safe release, TTL/expiry, cross-backend parity)**:
