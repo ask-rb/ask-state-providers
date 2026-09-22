@@ -78,8 +78,20 @@ module Ask
           prefixed_key = prefixed("lock:#{key}")
           token = SecureRandom.hex(16)
           expires_at = Time.now + ttl
+          ttl_ms = (ttl.to_f * 1000).ceil
 
-          acquired = @redis.call("SET", prefixed_key, token, "NX", "EX", ttl) == "OK"
+          # Redis rejects non-positive expire times, so SET … EX 0/-1
+          # raised instead of behaving like the SQL backends. A ttl <= 0
+          # lock is already expired on arrival: report success only when
+          # the key is free and write nothing, so the next acquire gets
+          # through the way an expired SQL row would. PX (not EX) keeps
+          # whole-second and sub-second TTLs on the same code path.
+          acquired = if ttl_ms <= 0
+            @redis.call("EXISTS", prefixed_key) == 0
+          else
+            @redis.call("SET", prefixed_key, token, "NX", "PX", ttl_ms) == "OK"
+          end
+
           acquired ? Lock.new(id: key, token: token, expires_at: expires_at) : nil
         end
 

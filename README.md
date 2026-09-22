@@ -56,7 +56,7 @@ store.delete("user:1")
 Every backend implements `Ask::State::Adapter`:
 
 - Key-value: `get`, `set(key, value, ttl:)`, `delete`, `set_if_not_exists`, `keys(pattern:)`, `clear`
-- Distributed locking: `acquire_lock(key, ttl:)`, `release_lock(key, lock)`
+- Distributed locking: `acquire_lock(key, ttl:)`, `release_lock(key, lock)` — token-safe on every backend: `release_lock` returns `true` only while the caller still owns an unexpired lock; a stale owner (wrong token, lock timed out, or lock taken over) gets `false` and cannot free the new owner's lock.
 - Message queues: `enqueue(queue, value)`, `dequeue(queue)`
 - Ordered lists: `list_append(key, value, max_length:)`, `list_range(key, start, stop)`, `list_remove(key, value)`
 
