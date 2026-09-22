@@ -21,7 +21,7 @@ Gem::Specification.new do |spec|
   spec.files = Dir["lib/**/*", "LICENSE", "README.md", "CHANGELOG.md"]
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "ask-core", ">= 0.11.4"
+  spec.add_dependency "ask-core", ">= 0.12.0"
   spec.add_dependency "connection_pool", ">= 2.2"
   spec.add_dependency "pg", ">= 1.5"
 
